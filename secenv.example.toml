@@ -1,0 +1,38 @@
+# secenv configuration. Copy to secenv.toml (or point SECENV_CONFIG at another path).
+# Any string can reference an environment variable with ${NAME}, so secrets stay out of this file.
+
+[server]
+port = 4400                      # the PORT env var wins if set (Render, Fly, Railway, ...)
+host = "0.0.0.0"
+# Used for OIDC redirects; https enables Secure cookies. Empty => http://localhost:<port>.
+public_url = "${SECENV_PUBLIC_URL}"
+# Number of reverse proxies in front of secenv (load balancer, CDN). The audit log records the
+# client IP from X-Forwarded-For only for this many trusted hops; 0 = use the socket address.
+# Render, Fly, Railway, Heroku: 1. Behind Cloudflare plus a platform proxy: 2.
+trusted_proxies = "${SECENV_TRUSTED_PROXIES}"
+database = "./data/secenv.db"   # SQLite file, relative to this config file
+# 32+ random bytes, e.g. `openssl rand -base64 32`. Required in production.
+# Values are encrypted with it: losing it means losing every secret.
+master_key = "${SECENV_MASTER_KEY}"
+
+[auth]
+session_ttl_hours = 168
+# Only these email domains may sign in (password and OIDC). Empty = anyone allowed by the methods below.
+allowed_email_domains = []
+
+[auth.password]
+enabled = true
+# The first account can always be created. After that, only if this is true.
+allow_signup = false
+
+[auth.oidc]
+enabled = false
+display_name = "Google"          # shown as "Continue with Google"
+issuer = "https://accounts.google.com"
+client_id = "${OIDC_CLIENT_ID}"
+client_secret = "${OIDC_CLIENT_SECRET}"
+scopes = ["openid", "email", "profile"]
+token_auth_method = "client_secret_basic"   # or "client_secret_post"
+auto_create_users = true         # false = only existing accounts (matched by email) may use SSO
+require_verified_email = true
+# Redirect URI to register with your provider: <public_url>/api/auth/oidc/callback

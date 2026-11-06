@@ -1,0 +1,15 @@
+{
+  "name": "secenv",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun --hot packages/server/src/index.ts",
+    "start": "NODE_ENV=production bun packages/server/src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p packages/server && tsc --noEmit -p packages/sdk",
+    "build:sdk": "cd packages/sdk && bun run build"
+  }
+}

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: secenv
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: secenv-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: SECENV_TRUSTED_PROXIES   # Render's proxy appends the client IP
+        value: "1"
+      - key: SECENV_MASTER_KEY
+        generateValue: true
+      - key: SECENV_PUBLIC_URL
+        value: https://secenv.onrender.com   # your service URL

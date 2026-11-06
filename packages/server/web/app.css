@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sidebar: #f7f7f5;
+  --color-sidebar-hover: #ececea;
+  --color-sidebar-active: #e7e7e5;
+  --color-brand: #1968ad;
+  --color-brand-hover: #155b99;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background: #fff;
+}

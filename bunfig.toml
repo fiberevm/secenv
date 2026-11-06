@@ -1,0 +1,6 @@
+[serve.static]
+# Expands the `@import "tailwindcss"` in web/app.css when Bun bundles the UI.
+plugins = ["bun-plugin-tailwind"]
+
+[install]
+linker = "hoisted"

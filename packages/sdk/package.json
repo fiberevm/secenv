@@ -1,0 +1,28 @@
+{
+  "name": "@secenv/sdk",
+  "version": "0.1.0",
+  "description": "Load environment variables from a secenv server",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "secenv": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts src/cli.ts --outdir dist --target node --format esm && tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}
