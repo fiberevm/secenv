@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, invalidateAll, revealValues, type ActivityPage, type Group, type VariableMeta, type ViewSource } from "../api";
 import { ActivityList } from "../components/ActivityFeed";
-import { EyeIcon, EyeOffIcon, PencilIcon, PlusIcon, SearchIcon, TrashIcon, UploadIcon } from "../components/icons";
+import { RobotIcon, UsersIcon, EyeIcon, EyeOffIcon, PencilIcon, PlusIcon, SearchIcon, TrashIcon, UploadIcon } from "../components/icons";
 import { Button, Card, CodeBlock, CopyButton, EmptyState, ErrorBanner, Field, IconButton, Input, Modal, PageHeader, Skeleton, Spinner, Textarea } from "../components/ui";
 import { formatDateTime, pluralize, timeAgo } from "../format";
 
@@ -107,6 +107,24 @@ function VariableEditor({
   );
 }
 
+/** A "when · who" cell. The time shows relative, the full timestamp is in the tooltip. */
+function MetaCell({ label, at, by, empty = "—", machine }: { label: string; at: number | null; by: string | null; empty?: string; machine?: boolean }) {
+  if (at === null) {
+    return <div className="hidden pt-0.5 text-xs text-neutral-300 lg:block">{empty}</div>;
+  }
+  return (
+    <div className="hidden min-w-0 pt-0.5 leading-tight lg:block" title={`${label} ${formatDateTime(at)}${by ? ` by ${by}` : ""}`}>
+      <p className="text-xs text-neutral-700">{timeAgo(at)}</p>
+      {by ? (
+        <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-neutral-500">
+          {machine ? <RobotIcon className="size-3 shrink-0 text-violet-500" /> : null}
+          <span className="truncate">{by}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function VariableRow({ groupId, variable, bulkValue }: { groupId: string; variable: VariableMeta; bulkValue: string | undefined }) {
   // Values are fetched per reveal; hiding forgets them, so every reveal is a logged view.
   const [value, setValue] = useState<string | null>(null);
@@ -115,6 +133,7 @@ function VariableRow({ groupId, variable, bulkValue }: { groupId: string; variab
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const shownValue = bulkValue ?? value;
+  const modified = variable.updatedAt > variable.createdAt;
   const shown = shownValue !== null;
 
   async function fetchValue(source: ViewSource): Promise<string> {
@@ -168,11 +187,11 @@ function VariableRow({ groupId, variable, bulkValue }: { groupId: string; variab
   }
 
   return (
-    <li className="group/var grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 px-4 py-2.5 hover:bg-neutral-50/70 md:grid-cols-[minmax(0,16rem)_minmax(0,1fr)_8rem_auto]">
+    <li className="group/var grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 px-4 py-2.5 hover:bg-neutral-50/70 lg:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_8.5rem_8.5rem_8.5rem_9rem]">
       <div className="min-w-0 pt-0.5">
         <span className="break-all font-mono text-[13px] font-medium text-neutral-950">{variable.key}</span>
       </div>
-      <div className="col-span-2 row-start-2 min-w-0 pt-0.5 md:col-span-1 md:row-start-auto">
+      <div className="col-span-2 row-start-2 min-w-0 pt-0.5 lg:col-span-1 lg:row-start-auto">
         {shown ? (
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[13px] leading-5 text-neutral-800">
             {shownValue || <span className="italic text-neutral-400">empty</span>}
@@ -191,10 +210,16 @@ function VariableRow({ groupId, variable, bulkValue }: { groupId: string; variab
         )}
         {error ? <p className="mt-1 text-xs text-red-700">{error instanceof Error ? error.message : "Could not load value"}</p> : null}
       </div>
-      <div className="hidden pt-1 text-xs text-neutral-500 md:block" title={`${formatDateTime(variable.updatedAt)} by ${variable.updatedBy}`}>
-        {timeAgo(variable.updatedAt)}
-      </div>
-      <div className="flex items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover/var:opacity-100 md:focus-within:opacity-100">
+      <MetaCell label="Added" at={variable.createdAt} by={variable.createdBy} />
+      <MetaCell label="Modified" at={modified ? variable.updatedAt : null} by={modified ? variable.updatedBy : null} empty="Never" />
+      <MetaCell label="Last loaded" at={variable.lastLoadedAt} by={variable.lastLoadedBy} empty="Never" machine />
+      {/* Below lg the three columns collapse into one line under the value. */}
+      <p className="col-span-2 row-start-3 text-[11px] leading-4 text-neutral-500 lg:hidden">
+        Added {timeAgo(variable.createdAt)} by {variable.createdBy || "unknown"}
+        {modified ? ` · modified ${timeAgo(variable.updatedAt)} by ${variable.updatedBy}` : ""}
+        {variable.lastLoadedAt ? ` · loaded ${timeAgo(variable.lastLoadedAt)} by ${variable.lastLoadedBy}` : " · never loaded"}
+      </p>
+      <div className="col-start-2 row-start-1 flex items-center justify-end gap-0.5 opacity-100 lg:col-start-auto lg:row-start-auto lg:opacity-0 lg:group-hover/var:opacity-100 lg:focus-within:opacity-100">
         <IconButton
           label={shown ? "Hide value" : "Reveal value (logged)"}
           disabled={bulkValue !== undefined || busy}
@@ -202,10 +227,18 @@ function VariableRow({ groupId, variable, bulkValue }: { groupId: string; variab
         >
           {shown ? <EyeOffIcon className="size-3.5" /> : <EyeIcon className="size-3.5" />}
         </IconButton>
-        <CopyButton label="Copy value (logged)" getText={async () => shownValue ?? (await fetchValue("copy"))} />
+        <CopyButton label="Copy value (logged)" getText={() => fetchValue("copy")} />
         <IconButton label="Edit" disabled={busy} onClick={() => run(async () => setEditValue(shownValue ?? (await fetchValue("edit"))))}>
           <PencilIcon className="size-3.5" />
         </IconButton>
+        <Link
+          to={`/access?group=${groupId}&key=${encodeURIComponent(variable.key)}&days=0`}
+          aria-label="Who has seen this value"
+          title="Who has seen this value"
+          className="grid size-7 shrink-0 place-items-center rounded-md text-neutral-400 outline-none transition-colors hover:bg-neutral-100 hover:text-neutral-900 focus-visible:ring-2 focus-visible:ring-fuchsia-600"
+        >
+          <UsersIcon className="size-3.5" />
+        </Link>
         <IconButton label="Delete" className="hover:!bg-red-50 hover:!text-red-700" onClick={() => setConfirmDelete(true)}>
           <TrashIcon className="size-3.5" />
         </IconButton>
@@ -487,7 +520,8 @@ export function GroupDetailPage() {
   }
 
   async function exportDotenv() {
-    const values = bulkValues ?? (await revealValues(group.id, null, "export"));
+    // Always fetch: an export is logged as a copy of every key, even if the values are on screen.
+    const values = await revealValues(group.id, null, "export");
     return variables.map((v) => `${v.key}=${JSON.stringify(values[v.id] ?? "")}`).join("\n") + "\n";
   }
 
@@ -556,11 +590,13 @@ export function GroupDetailPage() {
           {bulkError ? <ErrorBanner error={bulkError} onDismiss={() => setBulkError(null)} /> : null}
 
           <Card>
-            <div className="hidden grid-cols-[minmax(0,16rem)_minmax(0,1fr)_8rem_auto] gap-x-3 border-b border-neutral-200 bg-neutral-50/70 px-4 py-2 text-xs font-medium text-neutral-500 md:grid">
+            <div className="hidden grid-cols-[minmax(0,13rem)_minmax(0,1fr)_8.5rem_8.5rem_8.5rem_9rem] gap-x-3 border-b border-neutral-200 bg-neutral-50/70 px-4 py-2 text-xs font-medium text-neutral-500 lg:grid">
               <span>Key</span>
               <span>Value</span>
-              <span>Updated</span>
-              <span className="w-[7.25rem]" />
+              <span>Added</span>
+              <span>Modified</span>
+              <span title="Last time the SDK, CLI or HTTP API returned this key">Last loaded</span>
+              <span />
             </div>
             <ul className="divide-y divide-neutral-100">
               {adding ? (

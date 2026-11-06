@@ -26,6 +26,8 @@ export type Config = {
     oidc: OidcConfig | null;
     allowedEmailDomains: string[];
     sessionTtlHours: number;
+    /** If set, creating the very first account requires this token (protects fresh public deploys). */
+    setupToken: string;
   };
 };
 
@@ -57,14 +59,17 @@ function str(raw: Raw, key: string, fallback: string): string {
 
 function bool(raw: Raw, key: string, fallback: boolean): boolean {
   const value = raw[key];
-  if (value === undefined) return fallback;
-  if (typeof value !== "boolean") throw new Error(`config: "${key}" must be true or false`);
-  return value;
+  if (value === undefined || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  // "${ENV}" interpolation yields strings, so accept the usual spellings.
+  if (typeof value === "string" && /^(true|1|yes|on)$/i.test(value.trim())) return true;
+  if (typeof value === "string" && /^(false|0|no|off)$/i.test(value.trim())) return false;
+  throw new Error(`config: "${key}" must be true or false`);
 }
 
 function num(raw: Raw, key: string, fallback: number): number {
   const value = raw[key];
-  if (value === undefined) return fallback;
+  if (value === undefined || value === "") return fallback;
   const parsed = typeof value === "string" ? Number(value) : value;
   if (typeof parsed !== "number" || !Number.isFinite(parsed)) throw new Error(`config: "${key}" must be a number`);
   return parsed;
@@ -73,6 +78,8 @@ function num(raw: Raw, key: string, fallback: number): number {
 function strList(raw: Raw, key: string, fallback: string[]): string[] {
   const value = raw[key];
   if (value === undefined) return fallback;
+  // A comma-separated string (e.g. from "${ALLOWED_DOMAINS}") is accepted as a list.
+  if (typeof value === "string") return value.split(",").map((v) => v.trim()).filter(Boolean);
   if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
     throw new Error(`config: "${key}" must be a list of strings`);
   }
@@ -93,12 +100,12 @@ export function parseConfig(input: Raw, baseDir = process.cwd()): Config {
 
   let oidcConfig: OidcConfig | null = null;
   if (bool(oidc, "enabled", false)) {
-    const method = str(oidc, "token_auth_method", "client_secret_basic");
+    const method = str(oidc, "token_auth_method", "") || "client_secret_basic";
     if (method !== "client_secret_basic" && method !== "client_secret_post") {
       throw new Error('config: auth.oidc.token_auth_method must be "client_secret_basic" or "client_secret_post"');
     }
     oidcConfig = {
-      displayName: str(oidc, "display_name", "SSO"),
+      displayName: str(oidc, "display_name", "") || "SSO",
       issuer: str(oidc, "issuer", "").replace(/\/+$/, ""),
       clientId: str(oidc, "client_id", ""),
       clientSecret: str(oidc, "client_secret", ""),
@@ -115,7 +122,8 @@ export function parseConfig(input: Raw, baseDir = process.cwd()): Config {
   const config: Config = {
     port,
     host: str(server, "host", "0.0.0.0"),
-    publicUrl: (str(server, "public_url", "") || `http://localhost:${port}`).replace(/\/+$/, ""),
+    // Render sets RENDER_EXTERNAL_URL to the service's public https URL.
+    publicUrl: (str(server, "public_url", "") || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`).replace(/\/+$/, ""),
     trustedProxies: Math.max(0, Math.floor(num(server, "trusted_proxies", 0))),
     databasePath,
     masterKey: str(server, "master_key", ""),
@@ -127,6 +135,7 @@ export function parseConfig(input: Raw, baseDir = process.cwd()): Config {
       oidc: oidcConfig,
       allowedEmailDomains: strList(auth, "allowed_email_domains", []).map((d) => d.toLowerCase()),
       sessionTtlHours: num(auth, "session_ttl_hours", 24 * 7),
+      setupToken: str(auth, "setup_token", ""),
     },
   };
 

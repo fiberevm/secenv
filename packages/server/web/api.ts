@@ -43,6 +43,7 @@ export type AuthConfig = {
   password: { signupOpen: boolean } | null;
   oidc: { name: string } | null;
   needsSetup: boolean;
+  setupTokenRequired: boolean;
 };
 
 export type Stats = {

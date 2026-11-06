@@ -11,6 +11,7 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState<unknown>(urlError ? new Error(urlError) : null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -25,7 +26,7 @@ export function LoginPage() {
     return <div className="grid min-h-dvh place-items-center text-sm text-red-700">Could not reach the server.</div>;
   }
 
-  const { password: passwordAuth, oidc, needsSetup } = config.data;
+  const { password: passwordAuth, oidc, needsSetup, setupTokenRequired } = config.data;
   const effectiveMode = needsSetup ? "signup" : mode;
 
   async function submit(event: FormEvent) {
@@ -35,7 +36,7 @@ export function LoginPage() {
     try {
       const { user } = await api<{ user: User }>(effectiveMode === "signup" ? "/api/auth/signup" : "/api/auth/login", {
         method: "POST",
-        body: { email, password, name: name || undefined },
+        body: { email, password, name: name || undefined, setupToken: setupToken || undefined },
       });
       window.history.replaceState(null, "", "/");
       queryClient.setQueryData(["me"], user);
@@ -83,6 +84,11 @@ export function LoginPage() {
 
               {passwordAuth ? (
                 <form className="space-y-3" onSubmit={submit}>
+                  {setupTokenRequired ? (
+                    <Field label="Setup token" hint="Set by SECENV_SETUP_TOKEN on the server. On Render: the service's Environment tab.">
+                      <Input required autoComplete="off" spellCheck={false} className="font-mono" value={setupToken} onChange={(e) => setSetupToken(e.target.value)} />
+                    </Field>
+                  ) : null}
                   {effectiveMode === "signup" ? (
                     <Field label="Name">
                       <Input autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada Lovelace" />

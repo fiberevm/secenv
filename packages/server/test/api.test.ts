@@ -47,7 +47,7 @@ describe("secenv server", () => {
   afterAll(() => server.stop(true));
 
   test("first user can sign up, then sign-up closes", async () => {
-    expect((await alice("/api/auth/config")).data).toMatchObject({ needsSetup: true, password: { signupOpen: true } });
+    expect((await alice("/api/auth/config")).data).toMatchObject({ needsSetup: true, setupTokenRequired: false, password: { signupOpen: true } });
     const signup = await alice("/api/auth/signup", { method: "POST", body: { email: "Alice@Example.com", password: "correct horse battery" } });
     expect(signup.status).toBe(201);
     expect(signup.data.user.email).toBe("alice@example.com");
@@ -130,6 +130,15 @@ describe("secenv server", () => {
     expect(views[0]).toMatchObject({ actorLabel: "alice@example.com", ip: "127.0.0.1" });
     expect(views[0].userAgent).toBeTruthy();
 
+    // The access report answers "who saw / copied what".
+    const access = (await alice(`/api/access?group=${groupId}&days=0`)).data;
+    const row = (k: string) => access.people.find((r: any) => r.actor === "alice@example.com" && r.key === k);
+    expect(row("API_KEY")).toMatchObject({ views: 1, copies: 1, exports: 0, lastSource: "reveal", lastIp: "127.0.0.1", ipCount: 1 });
+    expect(row("REDIS_URL")).toMatchObject({ views: 1, copies: 0 });
+    const byKey = (await alice(`/api/access?key=API_KEY&days=0`)).data;
+    expect(byKey.people.every((r: any) => r.key === "API_KEY")).toBe(true);
+    expect(byKey.machines).toEqual([]);
+
     // Reveals are POST-only and CSRF-checked like any other mutation.
     expect((await alice(`/api/groups/${groupId}/variables/reveal`, { method: "POST", body: {}, origin: "https://evil.example" })).status).toBe(403);
     expect((await alice(`/api/groups/${groupId}/variables/reveal`, { method: "POST", body: { ids: ["nope"] } })).status).toBe(404);
@@ -184,6 +193,18 @@ describe("secenv server", () => {
       ["agent", "token", "backend-prod", ["API_KEY", "REDIS_URL"], "127.0.0.1"],
       ["agent", "token", "shared", ["API_KEY", "LOG_LEVEL"], "127.0.0.1"],
     ]);
+    // Per-variable provenance: who added it, who changed it last, and which token last received it.
+    const prodVars = (await alice("/api/groups/backend-prod")).data.variables;
+    const sharedVars = (await alice("/api/groups/shared")).data.variables;
+    const v = (list: any[], k: string) => list.find((x) => x.key === k);
+    expect(v(prodVars, "API_KEY")).toMatchObject({ createdBy: "alice@example.com", updatedBy: "alice@example.com", lastLoadedBy: "agent" });
+    expect(v(prodVars, "API_KEY").lastLoadedAt).toBeGreaterThan(0);
+    expect(v(sharedVars, "LOG_LEVEL")).toMatchObject({ lastLoadedBy: "agent" });
+    // shared's API_KEY was overridden by backend-prod in the merged load, so it was never delivered.
+    expect(v(sharedVars, "API_KEY")).toMatchObject({ lastLoadedAt: null, lastLoadedBy: null });
+
+    const machines = (await alice("/api/access?days=0")).data.machines;
+    expect(machines.find((m: any) => m.actor === "agent" && m.groupName === "shared")).toMatchObject({ loads: 1, keys: ["API_KEY", "LOG_LEVEL"] });
     // A denied load is not recorded.
     expect(reads.some((e: any) => e.actorLabel === "api" && e.groupName === "shared")).toBe(false);
   });
@@ -259,6 +280,9 @@ describe("secenv server", () => {
     test("write tools change variables and are audited as MCP", async () => {
       expect((await call(writeToken, "set_variable", { group: "shared", key: "FEATURE_X", value: "on" })).data.result).toBe("created");
       expect((await call(writeToken, "set_variable", { group: "shared", key: "FEATURE_X", value: "off" })).data.result).toBe("updated");
+      const featureX = (await alice("/api/groups/shared")).data.variables.find((x: any) => x.key === "FEATURE_X");
+      expect(featureX).toMatchObject({ createdBy: "agent", updatedBy: "agent" });
+      expect(featureX.updatedAt).toBeGreaterThanOrEqual(featureX.createdAt);
       expect((await call(writeToken, "delete_variable", { group: "shared", key: "FEATURE_X" })).data.result).toBe("deleted");
       const created = await call(writeToken, "create_group", { name: "from-agent" });
       expect(created.data.name).toBe("from-agent");
@@ -286,6 +310,20 @@ describe("secenv server", () => {
     await alice(`/api/groups/${groupId}`, { method: "DELETE" });
     const events = (await alice("/api/activity?action=group.delete")).data.events;
     expect(events[0]).toMatchObject({ groupName: "backend-prod", meta: { keys: ["API_KEY", "REDIS_URL"] } });
+  });
+});
+
+describe("setup token", () => {
+  test("is required to create the first account when configured", async () => {
+    const { server } = makeServer({ server: { database: ":memory:", master_key: masterKey, port: 0 }, auth: { setup_token: "let-me-in-123" } });
+    const user = browser(server.url.origin);
+    expect((await user("/api/auth/config")).data.setupTokenRequired).toBe(true);
+    const body = { email: "first@example.com", password: "long enough password" };
+    expect((await user("/api/auth/signup", { method: "POST", body })).status).toBe(403);
+    expect((await user("/api/auth/signup", { method: "POST", body: { ...body, setupToken: "wrong" } })).status).toBe(403);
+    expect((await user("/api/auth/signup", { method: "POST", body: { ...body, setupToken: "let-me-in-123" } })).status).toBe(201);
+    expect((await user("/api/auth/config")).data.setupTokenRequired).toBe(false);
+    server.stop(true);
   });
 });
 
@@ -331,6 +369,17 @@ describe("config", () => {
       auth: { oidc: { enabled: true, issuer: "https://idp.example/", client_id: "abc", client_secret: "${TEST_OIDC_SECRET}" } },
     });
     expect(config.auth.oidc).toMatchObject({ issuer: "https://idp.example", clientSecret: "s3cret", scopes: ["openid", "email", "profile"] });
+  });
+
+  test("accepts env-style strings for booleans, numbers and lists", () => {
+    const config = parseConfig({
+      server: { database: ":memory:", trusted_proxies: "1" },
+      auth: { allowed_email_domains: "a.com, b.com", password: { enabled: "true", allow_signup: "" }, oidc: { enabled: "false" } },
+    });
+    expect(config.trustedProxies).toBe(1);
+    expect(config.auth.allowedEmailDomains).toEqual(["a.com", "b.com"]);
+    expect(config.auth.password).toEqual({ enabled: true, allowSignup: false });
+    expect(config.auth.oidc).toBeNull();
   });
 
   test("rejects OIDC without a client secret", () => {
@@ -419,7 +468,7 @@ describe("OIDC sign-in", () => {
   test("full authorization code + PKCE round trip creates a user", async () => {
     const base = app.server.url.origin;
     const config = await (await fetch(`${base}/api/auth/config`)).json();
-    expect(config).toEqual({ password: null, oidc: { name: "Corp SSO" }, needsSetup: true });
+    expect(config).toEqual({ password: null, oidc: { name: "Corp SSO" }, needsSetup: true, setupTokenRequired: false });
 
     const start = await fetch(`${base}/api/auth/oidc/start`, { redirect: "manual" });
     expect(start.status).toBe(302);

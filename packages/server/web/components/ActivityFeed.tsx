@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api, type AuditEvent } from "../api";
 import { formatDateTime, timeAgo } from "../format";
-import { DownloadIcon, EyeIcon, EyeOffIcon, KeyIcon, PencilIcon, PlusIcon, RobotIcon, TrashIcon } from "./icons";
+import { CopyIcon, DownloadIcon, EyeIcon, EyeOffIcon, KeyIcon, PencilIcon, PlusIcon, RobotIcon, TrashIcon } from "./icons";
 import { Skeleton, Spinner, Tag } from "./ui";
 
 export const verbStyles = {
@@ -11,22 +11,16 @@ export const verbStyles = {
   update: { label: "Edited", dot: "bg-brand", badge: "bg-sky-50 text-sky-700 ring-sky-600/15", icon: PencilIcon },
   delete: { label: "Deleted", dot: "bg-red-500", badge: "bg-red-50 text-red-700 ring-red-600/15", icon: TrashIcon },
   revoke: { label: "Revoked", dot: "bg-red-500", badge: "bg-red-50 text-red-700 ring-red-600/15", icon: TrashIcon },
+  copy: { label: "Copied", dot: "bg-orange-500", badge: "bg-orange-50 text-orange-700 ring-orange-600/20", icon: CopyIcon },
   view: { label: "Viewed", dot: "bg-amber-500", badge: "bg-amber-50 text-amber-700 ring-amber-600/15", icon: EyeIcon },
   read: { label: "Loaded", dot: "bg-violet-500", badge: "bg-violet-50 text-violet-700 ring-violet-600/15", icon: DownloadIcon },
 } as const;
 
-const viewSourceLabels: Record<string, string> = {
-  reveal: "",
-  copy: "copied",
-  edit: "to edit",
-  export: "exported .env",
-  history: "from history",
-  mcp: "via MCP",
-  sdk: "via SDK",
-};
 
-function verbOf(action: string): keyof typeof verbStyles {
+
+function verbOf(action: string, source?: unknown): keyof typeof verbStyles {
   if (action === "env.read") return "read";
+  if (action === "var.view" && (source === "copy" || source === "export")) return "copy";
   return (action.split(".")[1] ?? "update") as keyof typeof verbStyles;
 }
 
@@ -115,15 +109,17 @@ export function describeEvent(event: AuditEvent, showGroup = true): ReactNode {
       );
     }
     case "var.view": {
-      const source = viewSourceLabels[String(meta.source)] ?? "";
+      const source = String(meta.source);
+      const verb =
+        source === "copy" ? "copied" : source === "export" ? "exported" : source === "edit" ? "opened to edit" : source === "history" ? "viewed a past value of" : "viewed";
       return (
         <>
-          viewed <Key>{event.key}</Key>
+          {verb} <Key>{event.key}</Key>
           <GroupLink event={event} showGroup={showGroup} />
-          {source && meta.source !== "mcp" ? (
+          {source === "export" ? (
             <>
               {" "}
-              <Tag tone="amber">{source}</Tag>
+              <Tag tone="amber">as .env</Tag>
             </>
           ) : null}
         </>
@@ -206,7 +202,7 @@ function ValueDiff({ eventId, event }: { eventId: number; event: AuditEvent }) {
 
 export function ActivityRow({ event, showGroup = true, compact = false }: { event: AuditEvent; showGroup?: boolean; compact?: boolean }) {
   const [revealed, setRevealed] = useState(false);
-  const verb = verbStyles[verbOf(event.action)] ?? verbStyles.update;
+  const verb = verbStyles[verbOf(event.action, event.meta?.source)] ?? verbStyles.update;
   const VerbIcon = event.action.startsWith("token") ? KeyIcon : verb.icon;
   const hasValues = event.hasOldValue || event.hasNewValue;
 

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { HTMLBundle } from "bun";
 import type { Config } from "./config";
 import { Vault } from "./crypto";
@@ -111,6 +112,7 @@ export function createApp(config: Config) {
         password: config.auth.password.enabled ? { signupOpen: signupOpen() } : null,
         oidc: config.auth.oidc ? { name: config.auth.oidc.displayName } : null,
         needsSetup: store.countUsers() === 0,
+        setupTokenRequired: store.countUsers() === 0 && Boolean(config.auth.setupToken),
       }),
     ),
 
@@ -124,6 +126,9 @@ export function createApp(config: Config) {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw badRequest("Enter a valid email address");
         if (!emailAllowed(email)) throw forbidden("That email domain is not allowed on this server");
         if (password.length < 10) throw badRequest("Use a password of at least 10 characters");
+        if (store.countUsers() === 0 && config.auth.setupToken && !safeEqual(optionalField(body, "setupToken") ?? "", config.auth.setupToken)) {
+          throw forbidden("The setup token is wrong. Find it in server.setup_token / SECENV_SETUP_TOKEN.");
+        }
         const user = store.createUser({
           email,
           name: optionalField(body, "name"),
@@ -197,6 +202,8 @@ export function createApp(config: Config) {
           if (existing) {
             store.linkOidcSubject(existing.id, identity.subject, identity.name);
             user = existing;
+          } else if (store.countUsers() === 0 && config.auth.setupToken) {
+            return fail("Create the first account with email/password and the setup token, then sign in with SSO.");
           } else if (config.auth.oidc.autoCreateUsers || store.countUsers() === 0) {
             user = store.createUser({ email: identity.email, name: identity.name, oidcSubject: identity.subject });
           } else {
@@ -317,6 +324,21 @@ export function createApp(config: Config) {
       });
     }),
 
+    "/api/access": authed((req) => {
+      const params = new URL(req.url).searchParams;
+      const days = Number(params.get("days") ?? 30);
+      const group = params.get("group");
+      return json({
+        ...store.accessReport({
+          groupId: group ? store.getGroup(group).id : undefined,
+          key: params.get("key") ?? undefined,
+          actor: params.get("actor") ?? undefined,
+          since: Number.isFinite(days) && days > 0 ? Date.now() - days * 86_400_000 : 0,
+        }),
+        actors: store.listActors(),
+      });
+    }),
+
     "/api/activity/:id/values": {
       POST: authed((req, user) => json(store.getEventValues(Number(req.params.id), userActor(user, req)))),
     },
@@ -402,6 +424,12 @@ export function createServer(config: Config, options: { ui?: HTMLBundle; port?: 
     development: options.development ?? false,
   });
   return { server, store };
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function normalizeIp(ip: string | null): string | null {

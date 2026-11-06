@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS env_vars (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL DEFAULT '',
+  last_loaded_at INTEGER,
+  last_loaded_by TEXT,
   UNIQUE (group_id, key)
 );
 
@@ -88,7 +91,28 @@ export function openDatabase(path: string): Database {
 function migrate(db: Database) {
   const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'").get();
   if (!table) return;
+  migrateVariables(db);
   const columns = new Set((db.query("PRAGMA table_info(audit_events)").all() as Array<{ name: string }>).map((c) => c.name));
   if (!columns.has("ip")) db.exec("ALTER TABLE audit_events ADD COLUMN ip TEXT");
   if (!columns.has("user_agent")) db.exec("ALTER TABLE audit_events ADD COLUMN user_agent TEXT");
+}
+
+function migrateVariables(db: Database) {
+  const columns = new Set((db.query("PRAGMA table_info(env_vars)").all() as Array<{ name: string }>).map((c) => c.name));
+  if (columns.has("created_by")) return;
+  db.transaction(() => {
+    db.exec("ALTER TABLE env_vars ADD COLUMN created_by TEXT NOT NULL DEFAULT ''");
+    db.exec("ALTER TABLE env_vars ADD COLUMN last_loaded_at INTEGER");
+    db.exec("ALTER TABLE env_vars ADD COLUMN last_loaded_by TEXT");
+    // Backfill from the audit log: who created each key, and the latest SDK load that included it.
+    db.exec(`UPDATE env_vars SET created_by = COALESCE((
+      SELECT actor_label FROM audit_events e
+      WHERE e.action = 'var.create' AND e.group_id = env_vars.group_id AND e.var_key = env_vars.key
+      ORDER BY e.id DESC LIMIT 1), updated_by)`);
+    db.exec(`UPDATE env_vars SET
+      last_loaded_at = (SELECT e.at FROM audit_events e, json_each(e.meta, '$.keys') k
+        WHERE e.action = 'env.read' AND e.group_id = env_vars.group_id AND k.value = env_vars.key ORDER BY e.id DESC LIMIT 1),
+      last_loaded_by = (SELECT e.actor_label FROM audit_events e, json_each(e.meta, '$.keys') k
+        WHERE e.action = 'env.read' AND e.group_id = env_vars.group_id AND k.value = env_vars.key ORDER BY e.id DESC LIMIT 1)`);
+  })();
 }

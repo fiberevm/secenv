@@ -2,7 +2,7 @@ import { useEffect, useState, type ComponentType, type SVGProps } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { api, queryClient, type Group, type User } from "../api";
-import { ActivityIcon, CloseIcon, GroupsIcon, KeyIcon, MenuIcon, OverviewIcon, PlusIcon, SignOutIcon, UsersIcon } from "./icons";
+import { ActivityIcon, CloseIcon, EyeIcon, GroupsIcon, KeyIcon, MenuIcon, OverviewIcon, PlusIcon, SignOutIcon, UsersIcon } from "./icons";
 import { NewGroupModal } from "../pages/GroupsPage";
 import { Logo } from "./Logo";
 
@@ -10,6 +10,7 @@ const navigation: Array<{ label: string; to: string; icon: ComponentType<SVGProp
   { label: "Overview", to: "/", icon: OverviewIcon, end: true },
   { label: "Env groups", to: "/groups", icon: GroupsIcon, end: true },
   { label: "Activity", to: "/activity", icon: ActivityIcon },
+  { label: "Access", to: "/access", icon: EyeIcon },
   { label: "API tokens", to: "/tokens", icon: KeyIcon },
   { label: "Members", to: "/members", icon: UsersIcon },
 ];

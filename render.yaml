@@ -1,17 +1,39 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# One web service (Docker) with a persistent disk for the SQLite database.
 services:
   - type: web
     name: secenv
     runtime: docker
-    plan: starter
+    dockerfilePath: ./Dockerfile
+    plan: starter            # persistent disks need a paid instance
+    region: oregon
     healthCheckPath: /healthz
+    autoDeploy: true
     disk:
       name: secenv-data
       mountPath: /app/data
       sizeGB: 1
     envVars:
-      - key: SECENV_TRUSTED_PROXIES   # Render's proxy appends the client IP
-        value: "1"
+      # Encrypts every value. Generated once; back it up from the Environment tab.
       - key: SECENV_MASTER_KEY
         generateValue: true
-      - key: SECENV_PUBLIC_URL
-        value: https://secenv.onrender.com   # your service URL
+      # Needed to create the first account. Copy it from the Environment tab after deploy.
+      - key: SECENV_SETUP_TOKEN
+        generateValue: true
+      # Render's proxy appends the client IP to X-Forwarded-For.
+      - key: SECENV_TRUSTED_PROXIES
+        value: "1"
+      # Optional: restrict sign-in to your company's domains, e.g. "acme.com,acme.dev".
+      - key: SECENV_ALLOWED_EMAIL_DOMAINS
+        sync: false
+      # Optional SSO. Set SECENV_OIDC_ENABLED=true and fill these in after deploy.
+      - key: SECENV_OIDC_ENABLED
+        value: "false"
+      - key: SECENV_OIDC_NAME
+        sync: false
+      - key: SECENV_OIDC_ISSUER
+        sync: false
+      - key: SECENV_OIDC_CLIENT_ID
+        sync: false
+      - key: SECENV_OIDC_CLIENT_SECRET
+        sync: false

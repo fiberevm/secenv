@@ -18,6 +18,10 @@
 </p>
 
 <p align="center">
+  <a href="https://render.com/deploy?repo=https://github.com/fiberevm/secenv"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" /></a>
+</p>
+
+<p align="center">
   <img src="docs/overview.png" alt="The secenv overview dashboard: stat tiles, a 30-day chart of variable changes, the most changed groups, and recent activity" width="100%" />
 </p>
 
@@ -29,18 +33,25 @@ secenv is a much smaller take on tools like [Infisical](https://github.com/infis
 
 - **Env groups, not a hierarchy.** Name a group `shared` or `backend-production`, put variables in it, and load one or more groups from a service. Later groups win, so `shared,backend-production` lets production override the shared defaults.
 - **Every change and every look, on the record.** Each create, edit, rename and delete is logged with who made it, when, and from which IP. So is every time a value is viewed: revealed, copied, opened for editing, exported, seen in history, or loaded by the SDK or MCP. Expand an edit to see the value before and after.
+- **Know where every key came from.** Each variable shows who added it and when, who last modified it, and when an SDK last loaded it and with which token. The **Access** page shows, per person and key, how many times they viewed or copied it, when, and from which IP.
 - **Encrypted at rest.** Values are sealed with AES-256-GCM under a master key you hold. The database alone is useless.
 - **Auth you choose.** Email/password, OIDC (Google, Okta, Entra ID, Auth0, Keycloak...), or both, set in `secenv.toml`.
 - **Built for agents too.** An MCP server lets Claude and other clients read groups and, with a read/write token, change them. Those changes are labelled in the log.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/group.png" alt="An env group's variables, with values masked until revealed" /></td>
+    <td width="50%"><img src="docs/group.png" alt="An env group's variables: masked values, who added and modified each key, and when an SDK last loaded it" /></td>
     <td width="50%"><img src="docs/activity.png" alt="The activity log with a before/after diff of an edited secret" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Env groups.</b> Masked values, inline editing, paste a whole <code>.env</code> to import.</sub></td>
+    <td align="center"><sub><b>Env groups.</b> Masked values, who added and changed each key, when it was last loaded.</sub></td>
     <td align="center"><sub><b>Activity.</b> Filter by change, group or person, and diff any edit.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/access.png" alt="The Access page: who viewed and copied which keys, and which tokens loaded which groups" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><sub><b>Access.</b> Who saw and copied what, and which machines loaded which groups.</sub></td>
   </tr>
 </table>
 
@@ -168,7 +179,7 @@ claude mcp add --transport http secenv https://secenv.example.com/mcp \
 | `env.read` | the SDK, CLI or HTTP API loads a group | one per group, with the keys handed out |
 | `group.*` / `token.*` | groups or tokens change | |
 
-Every event stores the actor, the client IP and the user agent. The dashboard never receives a value without asking for it: the group page loads key names only, and values come from an audited endpoint. Click an IP in the activity log to see everything from that address.
+Every event stores the actor, the client IP and the user agent. Each variable also records who created it, who last modified it, and the time and token of the last SDK load that delivered it (a key overridden by a later group doesn't count as loaded). The dashboard never receives a value without asking for it: the group page loads key names only, and values come from an audited endpoint. Click an IP in the activity log to see everything from that address. The **Access** page rolls the views up by person and key. Copying a value or exporting a `.env` is always logged as a copy, even when the value is already on screen.
 
 If secenv runs behind a proxy, set `server.trusted_proxies` to the number of proxies so the real client IP is recorded. Only the entries those proxies added to `X-Forwarded-For` are trusted, so a client can't spoof its address.
 
@@ -183,6 +194,7 @@ master_key = "${SECENV_MASTER_KEY}"
 
 [auth]
 allowed_email_domains = ["example.com"]   # applies to password and SSO
+setup_token = "${SECENV_SETUP_TOKEN}"     # required to create the first account
 
 [auth.password]
 enabled = true
@@ -204,13 +216,32 @@ Register `<public_url>/api/auth/oidc/callback` as the redirect URI with your pro
 
 ## Deploy
 
-A `Dockerfile` and a Render blueprint (`render.yaml`) are included.
+### Render (one click)
 
-1. Mount a persistent disk at `/app/data`. The SQLite database lives there.
-2. Set `SECENV_MASTER_KEY` and `SECENV_PUBLIC_URL`, and `trusted_proxies = 1` (or `${SECENV_TRUSTED_PROXIES}`) so IPs in the audit log are real.
-3. To use OIDC, edit `secenv.example.toml` before building, or point `SECENV_CONFIG` at a mounted file.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/fiberevm/secenv)
 
-`PORT` is honoured, so Render, Fly and Railway work without extra config.
+The [blueprint](./render.yaml) creates a Docker web service with a 1 GB persistent disk for the database (disks need a paid instance type), and:
+
+- generates `SECENV_MASTER_KEY`. **Back it up** from the service's Environment tab.
+- generates `SECENV_SETUP_TOKEN`. Copy it from the Environment tab; the first account can't be created without it, so nobody else can claim a fresh deploy.
+- sets `SECENV_TRUSTED_PROXIES=1` so the audit log records real client IPs behind Render's proxy.
+- prompts for optional `SECENV_ALLOWED_EMAIL_DOMAINS` and OIDC settings. Set `SECENV_OIDC_ENABLED=true` to turn on SSO, and register `https://<your-service>.onrender.com/api/auth/oidc/callback` with your provider.
+
+The public URL comes from Render's `RENDER_EXTERNAL_URL`; set `SECENV_PUBLIC_URL` if you use a custom domain.
+
+### Anywhere else (Docker)
+
+```sh
+docker build -t secenv .
+docker run -p 4400:4400 -v secenv-data:/app/data \
+  -e SECENV_MASTER_KEY="$(openssl rand -base64 32)" \
+  -e SECENV_SETUP_TOKEN="$(openssl rand -hex 16)" \
+  -e SECENV_PUBLIC_URL=https://secenv.example.com \
+  -e SECENV_TRUSTED_PROXIES=1 \
+  secenv
+```
+
+The image uses [`secenv.example.toml`](./secenv.example.toml), where every setting reads from a `SECENV_*` environment variable, so there's nothing to edit. Mount a different file with `SECENV_CONFIG` if you prefer. `PORT` is honoured, so Fly, Railway and Heroku-style platforms work too.
 
 ## Development
 

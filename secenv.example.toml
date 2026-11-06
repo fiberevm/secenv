@@ -1,38 +1,42 @@
-# secenv configuration. Copy to secenv.toml (or point SECENV_CONFIG at another path).
-# Any string can reference an environment variable with ${NAME}, so secrets stay out of this file.
+# secenv configuration. Copy to secenv.toml, or point SECENV_CONFIG at another path.
+#
+# Any string can reference an environment variable with ${NAME}. An empty value falls back
+# to the default shown in the comment, so this one file works for local dev and for
+# platforms like Render where everything is set through environment variables.
 
 [server]
-port = 4400                      # the PORT env var wins if set (Render, Fly, Railway, ...)
+port = 4400                                   # the PORT env var wins if set
 host = "0.0.0.0"
-# Used for OIDC redirects; https enables Secure cookies. Empty => http://localhost:<port>.
+# Used for OIDC redirects; https enables Secure cookies.
+# Empty => RENDER_EXTERNAL_URL on Render, else http://localhost:<port>.
 public_url = "${SECENV_PUBLIC_URL}"
-# Number of reverse proxies in front of secenv (load balancer, CDN). The audit log records the
-# client IP from X-Forwarded-For only for this many trusted hops; 0 = use the socket address.
-# Render, Fly, Railway, Heroku: 1. Behind Cloudflare plus a platform proxy: 2.
+# Reverse proxies in front of secenv. The audit log trusts this many X-Forwarded-For hops
+# when recording client IPs. 0 (default) = socket address. Render/Fly/Railway/Heroku: 1.
 trusted_proxies = "${SECENV_TRUSTED_PROXIES}"
-database = "./data/secenv.db"   # SQLite file, relative to this config file
-# 32+ random bytes, e.g. `openssl rand -base64 32`. Required in production.
-# Values are encrypted with it: losing it means losing every secret.
+database = "./data/secenv.db"                 # SQLite, relative to this file
+# 32+ random bytes: `openssl rand -base64 32`. Required in production.
+# Every value is encrypted with it. Lose it and the values are gone.
 master_key = "${SECENV_MASTER_KEY}"
 
 [auth]
 session_ttl_hours = 168
-# Only these email domains may sign in (password and OIDC). Empty = anyone allowed by the methods below.
-allowed_email_domains = []
+# Comma-separated. Only these email domains may sign in (password and SSO). Empty = any.
+allowed_email_domains = "${SECENV_ALLOWED_EMAIL_DOMAINS}"
+# If set, creating the first account requires this token. Set it on any public deploy.
+setup_token = "${SECENV_SETUP_TOKEN}"
 
 [auth.password]
-enabled = true
-# The first account can always be created. After that, only if this is true.
-allow_signup = false
+enabled = "${SECENV_PASSWORD_ENABLED}"         # default true
+allow_signup = "${SECENV_ALLOW_SIGNUP}"        # default false; the first account is always allowed
 
 [auth.oidc]
-enabled = false
-display_name = "Google"          # shown as "Continue with Google"
-issuer = "https://accounts.google.com"
-client_id = "${OIDC_CLIENT_ID}"
-client_secret = "${OIDC_CLIENT_SECRET}"
+enabled = "${SECENV_OIDC_ENABLED}"             # default false
+display_name = "${SECENV_OIDC_NAME}"           # "Continue with <name>", default "SSO"
+issuer = "${SECENV_OIDC_ISSUER}"               # e.g. https://accounts.google.com
+client_id = "${SECENV_OIDC_CLIENT_ID}"
+client_secret = "${SECENV_OIDC_CLIENT_SECRET}"
 scopes = ["openid", "email", "profile"]
-token_auth_method = "client_secret_basic"   # or "client_secret_post"
-auto_create_users = true         # false = only existing accounts (matched by email) may use SSO
+token_auth_method = "${SECENV_OIDC_TOKEN_AUTH_METHOD}"   # client_secret_basic (default) or client_secret_post
+auto_create_users = true                      # false = SSO only for existing accounts (matched by email)
 require_verified_email = true
 # Redirect URI to register with your provider: <public_url>/api/auth/oidc/callback

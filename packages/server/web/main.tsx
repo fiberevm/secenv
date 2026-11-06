@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { api, queryClient, type User } from "./api";
 import { Layout } from "./components/Layout";
 import { Spinner } from "./components/ui";
+import { AccessPage } from "./pages/AccessPage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { GroupDetailPage } from "./pages/GroupDetailPage";
 import { GroupsPage } from "./pages/GroupsPage";
@@ -49,6 +50,7 @@ function App() {
         <Route path="groups" element={<GroupsPage />} />
         <Route path="groups/:groupId" element={<GroupDetailPage />} />
         <Route path="activity" element={<ActivityPage />} />
+        <Route path="access" element={<AccessPage />} />
         <Route path="tokens" element={<TokensPage />} />
         <Route path="members" element={<MembersPage />} />
         <Route path="login" element={<Navigate to="/" replace />} />

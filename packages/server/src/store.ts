@@ -31,18 +31,16 @@ export type VariableMeta = {
   key: string;
   valueLength: number;
   createdAt: number;
+  createdBy: string;
+  /** Equal to createdAt until the key or value is first changed. */
   updatedAt: number;
   updatedBy: string;
+  /** Last time an SDK/CLI/HTTP load returned this key, and the token that loaded it. */
+  lastLoadedAt: number | null;
+  lastLoadedBy: string | null;
 };
 
-export type Variable = {
-  id: string;
-  key: string;
-  value: string;
-  createdAt: number;
-  updatedAt: number;
-  updatedBy: string;
-};
+export type Variable = Omit<VariableMeta, "valueLength"> & { value: string };
 
 export type TokenAccess = "read" | "write";
 
@@ -322,8 +320,11 @@ export class Store {
           key: r.key,
           value: this.vault.decrypt(r.value_enc),
           createdAt: r.created_at,
+          createdBy: r.created_by,
           updatedAt: r.updated_at,
           updatedBy: r.updated_by,
+          lastLoadedAt: r.last_loaded_at ?? null,
+          lastLoadedBy: r.last_loaded_by ?? null,
         };
       });
   }
@@ -352,7 +353,15 @@ export class Store {
 
   /** Record that a token loaded whole groups (SDK, CLI, HTTP). One event per group, listing its keys. */
   recordEnvRead(groups: Group[], actor: Actor, source: ViewSource) {
+    const now = Date.now();
+    // Later groups override earlier ones, so a key is "loaded" only from the group whose value won.
+    const winners = new Map<string, string>();
+    for (const group of groups) {
+      for (const r of this.db.query("SELECT id, key FROM env_vars WHERE group_id = ?").all(group.id) as Row[]) winners.set(r.key, r.id);
+    }
     this.db.transaction(() => {
+      const touch = this.db.query("UPDATE env_vars SET last_loaded_at = ?, last_loaded_by = ? WHERE id = ?");
+      for (const id of winners.values()) touch.run(now, actor.label, id);
       for (const group of groups) {
         const keys = this.db.query("SELECT key FROM env_vars WHERE group_id = ? ORDER BY key").all(group.id).map((r) => (r as Row).key);
         this.record(actor, "env.read", { groupId: group.id, groupName: group.name, meta: { source, keys } });
@@ -462,9 +471,9 @@ export class Store {
     const valueEnc = this.vault.encrypt(value);
     this.db
       .query(
-        "INSERT INTO env_vars (id, group_id, key, value_enc, created_at, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO env_vars (id, group_id, key, value_enc, created_at, updated_at, updated_by, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
-      .run(Bun.randomUUIDv7(), group.id, key, valueEnc, now, now, actor.label);
+      .run(Bun.randomUUIDv7(), group.id, key, valueEnc, now, now, actor.label, actor.label);
     this.touchGroup(group.id);
     this.record(actor, "var.create", { groupId: group.id, groupName: group.name, key, newValueEnc: valueEnc });
   }
@@ -635,6 +644,64 @@ export class Store {
     return {
       oldValue: row.old_value_enc ? this.vault.decrypt(row.old_value_enc) : null,
       newValue: row.new_value_enc ? this.vault.decrypt(row.new_value_enc) : null,
+    };
+  }
+
+  /**
+   * Who has seen which values. Groups var.view events by person and key, splitting copies and
+   * .env exports from on-screen views, and summarises SDK/CLI loads per token and group.
+   */
+  accessReport(filter: { groupId?: string; key?: string; actor?: string; since?: number }) {
+    const where = ["at >= $since"];
+    const params: Record<string, string | number> = { since: filter.since ?? 0 };
+    if (filter.groupId) {
+      where.push("group_id = $groupId");
+      params.groupId = filter.groupId;
+    }
+    if (filter.actor) {
+      where.push("actor_label = $actor");
+      params.actor = filter.actor;
+    }
+    const keyClause = filter.key ? " AND var_key = $key" : "";
+    if (filter.key) params.key = filter.key;
+    const base = where.join(" AND ");
+
+    // With a single MAX() aggregate, SQLite returns the bare columns (at, ip, source) from that
+    // row. MAX(id) rather than MAX(at): ids never tie, timestamps can within a millisecond.
+    const people = this.db
+      .query(
+        `SELECT actor_label AS actor, actor_kind AS actorKind, group_id AS groupId, group_name AS groupName, var_key AS key,
+                SUM(CASE WHEN json_extract(meta, '$.source') = 'copy' THEN 1 ELSE 0 END) AS copies,
+                SUM(CASE WHEN json_extract(meta, '$.source') = 'export' THEN 1 ELSE 0 END) AS exports,
+                SUM(CASE WHEN json_extract(meta, '$.source') NOT IN ('copy', 'export') THEN 1 ELSE 0 END) AS views,
+                COUNT(DISTINCT ip) AS ipCount, MAX(id) AS lastId, at AS lastAt, ip AS lastIp, user_agent AS lastUserAgent,
+                json_extract(meta, '$.source') AS lastSource
+         FROM audit_events WHERE action = 'var.view' AND ${base}${keyClause}
+         GROUP BY actor_label, group_id, var_key ORDER BY lastId DESC LIMIT 500`,
+      )
+      .all(params) as Array<Record<string, any>>;
+
+    const machines = filter.key
+      ? []
+      : (this.db
+          .query(
+            `SELECT actor_label AS actor, group_id AS groupId, group_name AS groupName, COUNT(*) AS loads,
+                    COUNT(DISTINCT ip) AS ipCount, MAX(id) AS lastId, at AS lastAt, ip AS lastIp, json_extract(meta, '$.keys') AS keys
+             FROM audit_events WHERE action = 'env.read' AND ${base}
+             GROUP BY actor_label, group_id ORDER BY lastId DESC LIMIT 200`,
+          )
+          .all(params) as Array<Record<string, any>>);
+
+    return {
+      people: people.map((r) => ({ ...r, groupExists: r.groupId ? Boolean(this.db.query("SELECT 1 FROM env_groups WHERE id = ?").get(r.groupId)) : false })),
+      machines: machines.map((r) => ({ ...r, keys: r.keys ? JSON.parse(r.keys) : [] })),
+      totals: {
+        people: new Set(people.filter((r) => r.actorKind === "user").map((r) => r.actor)).size,
+        keys: new Set(people.map((r) => `${r.groupId}/${r.key}`)).size,
+        views: people.reduce((n, r) => n + r.views, 0),
+        copies: people.reduce((n, r) => n + r.copies + r.exports, 0),
+        loads: machines.reduce((n, r) => n + r.loads, 0),
+      },
     };
   }
 
